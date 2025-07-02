@@ -1,0 +1,70 @@
+# gradle/libs.versions.toml
+
+[versions]
+agp = "8.9.1"
+kotlin = "2.0.21"
+coreKtx = "1.16.0"
+junit = "4.13.2"
+junitVersion = "1.2.1"
+espressoCore = "3.6.1"
+lifecycleRuntimeKtx = "2.9.1"
+activityCompose = "1.10.1"
+composeBom = "2024.09.00"
+signaturePad = "1.3.1"
+# Project Specific Library Versions
+mhiewPdfViewer = "3.2.0-beta.3" # Keeping mhiew's PDF viewer
+pdfbox-android = "2.0.27.0"
+
+#openpdf = "1.3.30" # RE-ADDED: OpenPDF
+kotlinxCoroutines = "1.7.3" # For both core and android coroutines
+
+androidxAppCompat = "1.6.1"
+constraintlayout = "2.1.4" # Or a newer stable version
+
+# Bouncy Castle versions for Digital Signature (still needed by OpenPDF for crypto)
+bouncycastle = "1.78"
+
+
+
+[libraries]
+# AndroidX Core
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "androidxAppCompat" }
+androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
+
+
+# Compose Libraries (if your project uses Compose, otherwise you can omit these if not used)
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+
+# Testing Libraries
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+
+# Application Specific Libraries
+mhiew-pdf-viewer = { group = "com.github.mhiew", name = "android-pdf-viewer", version.ref = "mhiewPdfViewer" } # Keeping mhiew's viewer
+#pdfbox = { group = "org.apache.pdfbox", name = "pdfbox", version.ref = "pdfbox" }
+#openpdf = { group = "com.github.librepdf", name = "openpdf", version.ref = "openpdf" } # RE-ADDED: OpenPDF
+signature-pad = { group = "com.github.gcacace", name = "signature-pad", version.ref = "signaturePad" }
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+
+# Bouncy Castle Libraries (still needed)
+pdfbox-android = { module = "com.tom-roush:pdfbox-android", version.ref = "pdfbox-android" }
+bouncy-castle-prov = { module = "org.bouncycastle:bcprov-jdk15to18", version.ref = "bouncycastle" }
+bouncy-castle-pkix = { module = "org.bouncycastle:bcpkix-jdk15to18", version.ref = "bouncycastle" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+
