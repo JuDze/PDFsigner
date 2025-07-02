@@ -43,6 +43,12 @@ class KeyStoreManager(private val context: Context) {
         return keyStore.containsAlias(alias)
     }
 
+    fun deleteKeyIfExists() {
+        if (keyStore.containsAlias(KEY_ALIAS)) {
+            keyStore.deleteEntry(KEY_ALIAS)
+        }
+    }
+
     fun generateKeyPairAndCertificate() {
         if (keyStore.containsAlias(KEY_ALIAS)) {
             return
@@ -64,7 +70,7 @@ class KeyStoreManager(private val context: Context) {
                     )
                         .setDigests(KeyProperties.DIGEST_SHA256)
                         .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
-                        .setCertificateSubject(X500Principal("CN=PdfSignerApp, OU=SelfSigned, O=ExampleOrg"))
+                        .setCertificateSubject(X500Principal("CN=RVPP APP, OU=SelfSigned, O=RVPP dokuments"))
                         .setCertificateSerialNumber(BigInteger.ONE)
                         .setCertificateNotBefore(start.time)
                         .setCertificateNotAfter(end.time)
@@ -80,7 +86,7 @@ class KeyStoreManager(private val context: Context) {
                 initialize(
                     KeyPairGeneratorSpec.Builder(context)
                         .setAlias(KEY_ALIAS)
-                        .setSubject(X500Principal("CN=PdfSignerApp, OU=SelfSigned, O=ExampleOrg"))
+                        .setSubject(X500Principal("CN=RVPP APP, OU=SelfSigned, O=RVPP dokuments"))
                         .setSerialNumber(BigInteger.ONE)
                         .setStartDate(start.time)
                         .setEndDate(end.time)

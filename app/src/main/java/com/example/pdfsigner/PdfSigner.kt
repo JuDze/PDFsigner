@@ -53,6 +53,7 @@ class PdfSigner {
         allowModifyContents: Boolean,
         callback: PdfSignCallback
     ) {
+
         var document: PDDocument? = null
         try {
             document = PDDocument.load(pdfInputStream)
@@ -79,9 +80,11 @@ class PdfSigner {
             val signature = PDSignature().apply {
                 setFilter(PDSignature.FILTER_ADOBE_PPKLITE)
                 setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED)
-                name = "PdfSignerApp"
+                name = "RVPP APP"
                 this.location = location
                 this.reason = reason
+                //val reason = "RVPP mērķiem"
+                //val location = "Rīga, Latvia"
                 signDate = Calendar.getInstance()
             }
 

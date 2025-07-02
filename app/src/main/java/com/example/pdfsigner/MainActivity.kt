@@ -123,6 +123,7 @@ class MainActivity : AppCompatActivity() {
 
         try {
             keyStoreManager = KeyStoreManager(this)
+            keyStoreManager.deleteKeyIfExists()// Delete existing key if it exists
             keyStoreManager.generateKeyPairAndCertificate()
             Log.d(TAG, "Key pair and certificate initialized/generated.")
         } catch (e: Exception) {
@@ -191,6 +192,7 @@ class MainActivity : AppCompatActivity() {
             .load()
     }
 
+
     private fun signPdfDocument() {
         if (currentPdfUri == null) {
             Toast.makeText(this, "No PDF loaded.", Toast.LENGTH_SHORT).show()
@@ -241,8 +243,8 @@ class MainActivity : AppCompatActivity() {
                 val pageNumber = pageCount
                 val signaturePosition = PDRectangle(50f, 50f, 150f, 100f)
                 // --- Define Security Parameters ---
-                val userPassword = "user123"
-                val ownerPassword = "owner456"
+                val userPassword = ""
+                val ownerPassword = ""
 
                 val allowPrinting = true
                 val allowCopy = false
@@ -326,6 +328,36 @@ class MainActivity : AppCompatActivity() {
             )
         }
     }
+
+
+    fun extractSignatureInfo(pdfFile: File): String {
+        val sb = StringBuilder()
+        PDDocument.load(pdfFile).use { document ->
+
+            val signatures = document.signatureDictionaries
+            if (signatures.isEmpty()) {
+                sb.appendLine("No digital signatures found.")
+                return sb.toString()
+            }
+
+            sb.appendLine("=== Digital Signatures ===\n")
+            signatures.forEachIndexed { index, sig ->
+                sb.appendLine("Signature #${index + 1}:")
+                sb.appendLine("Name: ${sig.name ?: "N/A"}")
+                sb.appendLine("Reason: ${sig.reason ?: "N/A"}")
+                sb.appendLine("Location: ${sig.location ?: "N/A"}")
+                sb.appendLine("Date: ${sig.signDate?.time ?: "N/A"}")
+
+                // Check if the signature covers the entire file
+                val coversWholeFile = sig.byteRange != null && sig.byteRange[0] == 0
+                sb.appendLine("Covers entire document: ${if (coversWholeFile) "Yes" else "No"}")
+
+                sb.appendLine()
+            }
+        }
+        return sb.toString()
+    }
+
 
     override fun onDestroy() {
         super.onDestroy()
