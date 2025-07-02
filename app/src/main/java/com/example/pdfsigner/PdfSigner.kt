@@ -83,8 +83,7 @@ class PdfSigner {
                 name = "RVPP APP"
                 this.location = location
                 this.reason = reason
-                //val reason = "RVPP mērķiem"
-                //val location = "Rīga, Latvia"
+
                 signDate = Calendar.getInstance()
             }
 

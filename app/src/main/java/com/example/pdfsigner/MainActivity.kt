@@ -250,8 +250,8 @@ class MainActivity : AppCompatActivity() {
                 val allowCopy = false
                 val allowModifyContents = false
 
-                val reason = "I approve this document"
-                val location = "Riga, Latvia"
+                val reason = "RVPP mērķiem"
+                val location = "Rīga, Latvia"
                 // ----------------------------------
 
                 val pdfSigner = PdfSigner()
