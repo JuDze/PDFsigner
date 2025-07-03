@@ -1,7 +1,6 @@
 package com.example.pdfsigner
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -15,354 +14,238 @@ import android.view.View
 import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.Toast
-import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.github.barteksc.pdfviewer.PDFView
-import com.github.barteksc.pdfviewer.listener.OnErrorListener
-import com.github.barteksc.pdfviewer.listener.OnLoadCompleteListener
-import com.github.barteksc.pdfviewer.listener.OnPageChangeListener
-import com.github.barteksc.pdfviewer.listener.OnPageErrorListener
+import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
 import com.tom_roush.pdfbox.pdmodel.PDDocument
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import com.tom_roush.pdfbox.pdmodel.common.PDRectangle as Box
+import kotlinx.coroutines.*
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.io.OutputStream
-import java.security.PrivateKey
-import java.security.cert.Certificate
-import java.security.Security
-import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
-import kotlinx.coroutines.plus
-import kotlinx.coroutines.suspendCancellableCoroutine
 
 class MainActivity : AppCompatActivity() {
-
-    private val TAG = "PdfVisualSignerApp"
-    private val REQUEST_STORAGE_PERMISSIONS = 1
-    private val REQUEST_MANAGE_ALL_FILES_ACCESS = 2
-
     private lateinit var pdfView: PDFView
+    private lateinit var signatureOverlay: SignatureOverlayView
+    private lateinit var placementView: SignaturePlacementView
+
     private lateinit var loadPdfButton: Button
-    private lateinit var drawSignatureButton: Button
-    private lateinit var signPdfButton: Button
+    private lateinit var signButton: Button
+    private lateinit var placeButton: Button
+    private lateinit var saveButton: Button
+    private lateinit var clearButton: Button
     private lateinit var progressBar: ProgressBar
 
     private var currentPdfUri: Uri? = null
-    private var capturedSignatureBitmap: Bitmap? = null
-    private lateinit var keyStoreManager: KeyStoreManager
+    private var currentPageIndex = 0
+    private var capturedBitmap: Bitmap? = null
+    private var capturedJson: String? = null
 
-    private val activityScope = CoroutineScope(Dispatchers.Main + Job())
+    private lateinit var keyStoreManager: KeyStoreManager
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val pickPdfLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            currentPdfUri = uri
-            displayPdf(uri)
-            drawSignatureButton.isEnabled = true
-            signPdfButton.isEnabled = false
-        } else {
-            Toast.makeText(this, "No PDF selected", Toast.LENGTH_SHORT).show()
+    ) { uri ->
+        uri?.let {
+            currentPdfUri = it
+            signatureOverlay.visibility = View.GONE
+            placementView.visibility = View.GONE
+            clearButton.isEnabled = false
+            saveButton.isEnabled  = false
+            placeButton.isEnabled = false
+            displayPdf(it)
         }
     }
 
-    private val signaturePadLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val data: Intent? = result.data
-            val signatureBitmap: Bitmap? = data?.getParcelableExtra("signature")
-            if (signatureBitmap != null) {
-                capturedSignatureBitmap = signatureBitmap
-                Toast.makeText(this, "Signature captured!", Toast.LENGTH_SHORT).show()
-                signPdfButton.isEnabled = true
-            } else {
-                Toast.makeText(this, "Signature capture failed.", Toast.LENGTH_SHORT).show()
-                signPdfButton.isEnabled = false
-            }
-        } else if (result.resultCode == Activity.RESULT_CANCELED) {
-            Toast.makeText(this, "Signature capture cancelled.", Toast.LENGTH_SHORT).show()
-            signPdfButton.isEnabled = false
-        }
-    }
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
+    override fun onCreate(saved: Bundle?) {
+        super.onCreate(saved)
         setContentView(R.layout.activity_main)
 
-        pdfView = findViewById(R.id.pdfView)
-        loadPdfButton = findViewById(R.id.loadPdfButton)
-        drawSignatureButton = findViewById(R.id.drawSignatureButton)
-        signPdfButton = findViewById(R.id.applySignatureButton)
-        progressBar = findViewById(R.id.progressBar)
+        pdfView          = findViewById(R.id.pdfView)
+        signatureOverlay = findViewById(R.id.signatureOverlay)
+        placementView    = findViewById(R.id.signaturePlacementView)
+        loadPdfButton    = findViewById(R.id.loadPdfButton)
+        signButton       = findViewById(R.id.signButton)
+        placeButton      = findViewById(R.id.placeButton)
+        saveButton       = findViewById(R.id.saveButton)
+        clearButton      = findViewById(R.id.clearButton)
+        progressBar      = findViewById(R.id.progressBar)
 
-        loadPdfButton.setOnClickListener { requestPermissionsAndPickPdf() }
-        drawSignatureButton.setOnClickListener {
-            if (currentPdfUri != null) {
-                val intent = Intent(this, SignatureActivity::class.java)
-                signaturePadLauncher.launch(intent)
-            } else {
-                Toast.makeText(this, "Please load a PDF first.", Toast.LENGTH_SHORT).show()
-            }
-        }
-        signPdfButton.setOnClickListener {
-            if (currentPdfUri != null && capturedSignatureBitmap != null) {
-                signPdfDocument()
-            } else {
-                Toast.makeText(this, "Load PDF and draw signature first.", Toast.LENGTH_SHORT).show()
-            }
+        keyStoreManager = KeyStoreManager(this).apply {
+            // ensure a fresh key with SHA-512 support
+            deleteKeyIfExists()
+            generateKeyPairAndCertificate()
         }
 
-        try {
-            keyStoreManager = KeyStoreManager(this)
-            keyStoreManager.deleteKeyIfExists()// Delete existing key if it exists
-            keyStoreManager.generateKeyPairAndCertificate()
-            Log.d(TAG, "Key pair and certificate initialized/generated.")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error initializing KeyStoreManager or generating key pair: ${e.message}", e)
-            Toast.makeText(this, "Error initializing security: ${e.message}", Toast.LENGTH_LONG).show()
+        loadPdfButton.setOnClickListener { requestPdf() }
+        signButton.setOnClickListener {
+            signatureOverlay.visibility = View.VISIBLE
+            signatureOverlay.drawingModeEnabled = true
+            Toast.makeText(this, "Draw your signature", Toast.LENGTH_SHORT).show()
+            placeButton.isEnabled = true
+            clearButton.isEnabled = true
         }
+        clearButton.setOnClickListener {
+            signatureOverlay.clear()
+            placementView.visibility = View.GONE
+            placeButton.isEnabled = false
+            saveButton.isEnabled = false
+        }
+        placeButton.setOnClickListener {
+            capturedBitmap = signatureOverlay.getSignatureBitmap()
+            capturedJson   = signatureOverlay.getBiometricJson()
+            signatureOverlay.visibility = View.GONE
+            placementView.setSignatureBitmap(capturedBitmap!!)
+            placementView.visibility = View.VISIBLE
+            placeButton.isEnabled = false
+            saveButton.isEnabled = true
+        }
+        saveButton.setOnClickListener {
+            signatureOverlay.drawingModeEnabled = false
+            saveButton.isEnabled = false
+            clearButton.isEnabled = false
+            signButton.isEnabled = false
+            doEmbedAndSign()
+        }
+
+        clearButton.isEnabled = false
+        placeButton.isEnabled = false
+        saveButton.isEnabled  = false
     }
 
-    private fun requestPermissionsAndPickPdf() {
+    private fun requestPdf() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (Environment.isExternalStorageManager()) {
                 pickPdfLauncher.launch("application/pdf")
             } else {
-                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                val uri = Uri.fromParts("package", packageName, null)
-                intent.data = uri
-                startActivityForResult(intent, REQUEST_MANAGE_ALL_FILES_ACCESS)
+                startActivity(
+                    Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
+                        .setData(Uri.fromParts("package", packageName, null))
+                )
             }
         } else {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+            val perms = arrayOf(
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            )
+            if (perms.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
                 pickPdfLauncher.launch("application/pdf")
             } else {
-                ActivityCompat.requestPermissions(this,
-                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE),
-                    REQUEST_STORAGE_PERMISSIONS)
+                ActivityCompat.requestPermissions(this, perms, 0)
             }
         }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_STORAGE_PERMISSIONS) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Storage permissions granted.", Toast.LENGTH_SHORT).show()
-                pickPdfLauncher.launch("application/pdf")
-            } else {
-                Toast.makeText(this, "Storage permissions denied. Cannot load or save PDF.", Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_MANAGE_ALL_FILES_ACCESS) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                if (Environment.isExternalStorageManager()) {
-                    Toast.makeText(this, "Manage external storage permission granted.", Toast.LENGTH_SHORT).show()
-                    pickPdfLauncher.launch("application/pdf")
-                } else {
-                    Toast.makeText(this, "Manage external storage permission denied. Cannot save signed PDF to public storage.", Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-    }
-
-    private fun displayPdf(pdfUri: Uri) {
-        pdfView.fromUri(pdfUri)
-            .onLoad { nbPages ->
-                Log.d(TAG, "PDF loaded with $nbPages pages.")
-            }
-            .onError { t ->
-                Log.e(TAG, "Error loading PDF: ${t.message}", t)
-                Toast.makeText(this, "Error loading PDF: ${t.message}", Toast.LENGTH_LONG).show()
-            }
+    private fun displayPdf(uri: Uri) {
+        pdfView.fromUri(uri)
+            .enableSwipe(true)
+            .swipeHorizontal(false)
+            .enableDoubletap(true)
+            .enableAntialiasing(true)
+            .defaultPage(0)
+            .spacing(8)
+            .onPageChange { page, _ -> currentPageIndex = page }
             .load()
     }
 
-
-    private fun signPdfDocument() {
-        if (currentPdfUri == null) {
-            Toast.makeText(this, "No PDF loaded.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (capturedSignatureBitmap == null) {
-            Toast.makeText(this, "No signature drawn.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (!keyStoreManager.containsKey()) {
-            Toast.makeText(this, "Digital signing certificate not available. Please restart app.", Toast.LENGTH_LONG).show()
-            return
-        }
+    private fun doEmbedAndSign() {
+        val inUri = currentPdfUri ?: return
+        val bmp   = capturedBitmap ?: return
+        val bio   = capturedJson   ?: "{}"
+        val viewRect = placementView.getPlacementRect()  // android.graphics.RectF
 
         progressBar.visibility = View.VISIBLE
-        loadPdfButton.isEnabled = false
-        drawSignatureButton.isEnabled = false
-        signPdfButton.isEnabled = false
 
-        activityScope.launch {
+        scope.launch(Dispatchers.IO) {
             try {
-                val privateKey: PrivateKey? = keyStoreManager.getPrivateKey()
-                val certificateChain: Array<Certificate>? = keyStoreManager.getCertificateChain()
-
-                if (privateKey == null || certificateChain == null || certificateChain.isEmpty()) {
-                    throw IllegalStateException("Private key or certificate chain not found in KeyStore.")
+                // --- compute PDF coords from viewRect ---
+                val (pdfWidth, pdfHeight) = contentResolver.openInputStream(inUri)!!.use { stream ->
+                    PDDocument.load(stream).use { doc ->
+                        val page = doc.getPage(currentPageIndex)
+                        page.mediaBox.width to page.mediaBox.height
+                    }
                 }
 
-                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                if (!downloadsDir.exists()) {
-                    downloadsDir.mkdirs()
+                val sx = pdfWidth  / placementView.width
+                val sy = pdfHeight / placementView.height
+
+                val pdfRect = PDRectangle(
+                    viewRect.left   * sx,
+                    pdfHeight - viewRect.bottom * sy,
+                    viewRect.width()  * sx,
+                    viewRect.height() * sy
+                )
+
+                // --- Phase 1: embed visual signature ---
+                val tmp = File(cacheDir, "tmp.pdf")
+                contentResolver.openInputStream(inUri)!!.use { inp ->
+                    FileOutputStream(tmp).use { out ->
+                        PdfSigner().embedVisualSignature(
+                            pdfInput              = inp,
+                            pdfOutput             = out,
+                            visualSignatureBitmap = bmp,
+                            pageNumber            = currentPageIndex + 1,
+                            position              = pdfRect,
+                            biometricJson         = bio
+                        )
+                    }
                 }
-                val outputFileName = "digitally_signed_secure_${System.currentTimeMillis()}.pdf"
-                val outputFile = File(downloadsDir, outputFileName)
 
-                val inputStream: InputStream = contentResolver.openInputStream(currentPdfUri!!)!!
-                val outputStream: OutputStream = FileOutputStream(outputFile)
+                // --- Phase 2: digital sign ---
+                val signed = File(
+                    Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS
+                    ),
+                    "signed_${System.currentTimeMillis()}.pdf"
+                )
+                // regenerate key to ensure correct digests
+                keyStoreManager.deleteKeyIfExists()
+                keyStoreManager.generateKeyPairAndCertificate()
 
-                // Define signature position (example: bottom-left corner of the first page)
-                // The values are in PDF points (1/72 inch). Adjust as needed for your desired placement.
-                // PDRectangle(x, y, width, height) where y is the bottom coordinate.
-                //val signaturePosition = PDRectangle(50f, 50f, 150f, 100f)
-                //val pageNumber = 1 // Add signature to the first page
-// Load the PDF first to get page count
-                val pageCount: Int = PDDocument.load(contentResolver.openInputStream(currentPdfUri!!)!!).use { it.numberOfPages }
-
-// Put the signature on the last page
-                val pageNumber = pageCount
-                val signaturePosition = PDRectangle(50f, 50f, 150f, 100f)
-                // --- Define Security Parameters ---
-                val userPassword = ""
-                val ownerPassword = ""
-
-                val allowPrinting = true
-                val allowCopy = false
-                val allowModifyContents = false
-
-                val reason = "RVPP mērķiem"
-                val location = "Rīga, Latvia"
-                // ----------------------------------
-
-                val pdfSigner = PdfSigner()
-                awaitAddVisualAndDigitalSignatureAndEncrypt(pdfSigner, inputStream, outputStream,
-                    capturedSignatureBitmap!!, signaturePosition, pageNumber,
-                    privateKey, certificateChain, reason, location,
-                    userPassword, ownerPassword, allowPrinting, allowCopy, allowModifyContents)
+                PdfSigner().addDigitalSignature(
+                    inputFile        = tmp,
+                    outputFile       = signed,
+                    privateKey       = keyStoreManager.getPrivateKey()!!,
+                    certificateChain = keyStoreManager.getCertificateChain()!!,
+                    biometricJson    = bio,
+                    reason           = "Approved by user",
+                    location         = "Riga, Latvia"
+                )
 
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "PDF digitally signed and secured. Saved to: ${outputFile.absolutePath}", Toast.LENGTH_LONG).show()
-                    displayPdf(Uri.fromFile(outputFile))
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Signed: ${signed.absolutePath}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    displayPdf(Uri.fromFile(signed))
+                    signatureOverlay.clear()
+                    placementView.visibility = View.GONE
                 }
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Error signing PDF: ${e.message}", e)
+            } catch (ex: Exception) {
+                Log.e("PdfSigner", "Error embedding/signing PDF", ex)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Error signing PDF: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Error: ${ex.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             } finally {
                 withContext(Dispatchers.Main) {
                     progressBar.visibility = View.GONE
-                    loadPdfButton.isEnabled = true
-                    drawSignatureButton.isEnabled = true
-                    signPdfButton.isEnabled = true
+                    clearButton.isEnabled = true
+                    signButton.isEnabled = true
                 }
-                capturedSignatureBitmap?.recycle()
-                capturedSignatureBitmap = null
             }
         }
     }
-
-    private suspend fun awaitAddVisualAndDigitalSignatureAndEncrypt(
-        pdfSigner: PdfSigner,
-        inputStream: InputStream,
-        outputStream: OutputStream,
-        visualSignatureBitmap: Bitmap,
-        position: PDRectangle,
-        pageNumber: Int,
-        privateKey: PrivateKey,
-        certificateChain: Array<Certificate>,
-        reason: String,
-        location: String,
-        userPassword: String?,
-        ownerPassword: String?,
-        allowPrinting: Boolean,
-        allowCopy: Boolean,
-        allowModifyContents: Boolean
-    ): String = withContext(Dispatchers.IO) {
-        kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
-            pdfSigner.addVisualAndDigitalSignatureAndEncrypt(
-                inputStream,
-                outputStream,
-                visualSignatureBitmap,
-                position,
-                pageNumber,
-                privateKey,
-                certificateChain,
-                reason,
-                location,
-                userPassword,
-                ownerPassword,
-                allowPrinting,
-                allowCopy,
-                allowModifyContents,
-                object : PdfSigner.PdfSignCallback {
-                    override fun onSuccess(outputPath: String) {
-                        continuation.resumeWith(Result.success(outputPath))
-                    }
-
-                    override fun onError(e: Exception) {
-                        continuation.resumeWith(Result.failure(e))
-                    }
-                }
-            )
-        }
-    }
-
-
-    fun extractSignatureInfo(pdfFile: File): String {
-        val sb = StringBuilder()
-        PDDocument.load(pdfFile).use { document ->
-
-            val signatures = document.signatureDictionaries
-            if (signatures.isEmpty()) {
-                sb.appendLine("No digital signatures found.")
-                return sb.toString()
-            }
-
-            sb.appendLine("=== Digital Signatures ===\n")
-            signatures.forEachIndexed { index, sig ->
-                sb.appendLine("Signature #${index + 1}:")
-                sb.appendLine("Name: ${sig.name ?: "N/A"}")
-                sb.appendLine("Reason: ${sig.reason ?: "N/A"}")
-                sb.appendLine("Location: ${sig.location ?: "N/A"}")
-                sb.appendLine("Date: ${sig.signDate?.time ?: "N/A"}")
-
-                // Check if the signature covers the entire file
-                val coversWholeFile = sig.byteRange != null && sig.byteRange[0] == 0
-                sb.appendLine("Covers entire document: ${if (coversWholeFile) "Yes" else "No"}")
-
-                sb.appendLine()
-            }
-        }
-        return sb.toString()
-    }
-
 
     override fun onDestroy() {
         super.onDestroy()
-        activityScope.cancel()
-        capturedSignatureBitmap?.recycle()
-        capturedSignatureBitmap = null
+        scope.cancel()
     }
 }
