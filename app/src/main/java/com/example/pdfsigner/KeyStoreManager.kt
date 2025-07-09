@@ -43,7 +43,7 @@ class KeyStoreManager(private val context: Context) {
                 KeyProperties.DIGEST_SHA512
             )
             .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
-            .setCertificateSubject(X500Principal("CN=RVPP APP, OU=SelfSigned, O=RVPP_dokuments"))
+            .setCertificateSubject(X500Principal("CN=Empty, OU=Empty, O=Empty"))
             .setCertificateSerialNumber(BigInteger.ONE)
             .setCertificateNotBefore(start.time)
             .setCertificateNotAfter(end.time)
