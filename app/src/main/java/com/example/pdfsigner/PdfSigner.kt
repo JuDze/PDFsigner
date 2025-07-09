@@ -1,72 +1,74 @@
+// File: app/src/main/java/com/example/pdfsigner/PdfSigner.kt
 package com.example.pdfsigner
 
 import android.graphics.Bitmap
 import com.tom_roush.pdfbox.pdmodel.PDDocument
-import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
 import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
 import com.tom_roush.pdfbox.pdmodel.interactive.digitalsignature.PDSignature
 import com.tom_roush.pdfbox.pdmodel.interactive.digitalsignature.SignatureInterface
+import org.bouncycastle.asn1.ASN1Integer
+import org.bouncycastle.asn1.ASN1ObjectIdentifier
+import org.bouncycastle.asn1.DEROctetString
+import org.bouncycastle.asn1.DERSequence
+import org.bouncycastle.asn1.DERSet
+import org.bouncycastle.asn1.cms.Attribute
+import org.bouncycastle.asn1.cms.AttributeTable
+import org.bouncycastle.asn1.cms.CMSObjectIdentifiers
+import org.bouncycastle.cert.jcajce.JcaCertStore
+import org.bouncycastle.cms.CMSTypedData
+import org.bouncycastle.cms.CMSSignedDataGenerator
+import org.bouncycastle.cms.DefaultSignedAttributeTableGenerator
+import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder
+import org.bouncycastle.operator.ContentSigner
+import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder
+import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder
 import org.bouncycastle.jce.provider.BouncyCastleProvider
-import java.io.*
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.security.PrivateKey
 import java.security.Security
+import java.security.Signature
 import java.security.cert.Certificate
-import java.util.*
-import org.bouncycastle.cms.CMSSignedDataGenerator
-import org.bouncycastle.cms.CMSProcessableByteArray
-import org.bouncycastle.cms.jcajce.JcaSignerInfoGeneratorBuilder
-import org.bouncycastle.cert.jcajce.JcaCertStore
-import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
-import org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder
+import java.security.cert.X509Certificate
+import java.util.Calendar
+import java.util.Hashtable
 
 class PdfSigner {
 
-    interface PdfSignCallback {
-        fun onSuccess(outputPath: String)
-        fun onError(e: Exception)
+    init {
+        // Install full BC provider on Android
+        Security.removeProvider("BC")
+        Security.insertProviderAt(BouncyCastleProvider(), 1)
     }
 
-    companion object {
-        init {
-            if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
-                Security.addProvider(BouncyCastleProvider())
-            }
-        }
-    }
-
-    fun addVisualAndDigitalSignature(
-        pdfInputStream: InputStream,
-        outputStream: OutputStream,
+    /**
+     * Embed your PNG signature and stash the raw JSON in the PDF Info dictionary.
+     */
+    fun embedVisualSignature(
+        pdfInput: InputStream,
+        pdfOutput: OutputStream,
         visualSignatureBitmap: Bitmap,
-        position: PDRectangle,
         pageNumber: Int,
-        privateKey: PrivateKey,
-        certificateChain: Array<Certificate>,
-        reason: String,
-        location: String,
-        callback: PdfSignCallback
+        position: PDRectangle,
+        biometricJson: String
     ) {
-        var tempFile: File? = null
-        var document: PDDocument? = null
-
-        try {
-            // 1️⃣ Copy input to temp file
-            tempFile = File.createTempFile("pdf_to_sign", ".pdf")
-            FileOutputStream(tempFile).use { fos ->
-                pdfInputStream.copyTo(fos)
+        PDDocument.load(pdfInput).use { doc ->
+            // Draw signature image
+            val page = doc.getPage(pageNumber - 1)
+            val baos = java.io.ByteArrayOutputStream().apply {
+                visualSignatureBitmap.compress(Bitmap.CompressFormat.PNG, 100, this)
             }
-
-            // 2️⃣ Load document
-            document = PDDocument.load(tempFile)
-
-            // 3️⃣ Draw visual signature
-            val page: PDPage = document.getPage(pageNumber - 1)
-            PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, true).use { cs ->
-                val baos = ByteArrayOutputStream()
-                visualSignatureBitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
-                val pdImage = PDImageXObject.createFromByteArray(document, baos.toByteArray(), "sig_img")
+            val pdImage = PDImageXObject.createFromByteArray(
+                doc, baos.toByteArray(), "sig_image"
+            )
+            PDPageContentStream(
+                doc, page,
+                PDPageContentStream.AppendMode.APPEND, true
+            ).use { cs ->
                 cs.drawImage(
                     pdImage,
                     position.lowerLeftX,
@@ -76,67 +78,101 @@ class PdfSigner {
                 )
             }
 
-            // 4️⃣ Create signature dictionary
-            val signature = PDSignature().apply {
+            // Put the raw JSON into the document's Info (visible in any PDF Properties)
+            doc.documentInformation
+                .setCustomMetadataValue("BiometricData", biometricJson)
+
+            doc.save(pdfOutput)
+        }
+    }
+
+    /**
+     * Add a detached PKCS#7 (PAdES) signature, injecting your JSON as an ISO/IEC 19794-7 BDB attribute.
+     */
+    fun addDigitalSignature(
+        inputFile: File,
+        outputFile: File,
+        privateKey: PrivateKey,
+        certificateChain: Array<Certificate>,
+        biometricJson: String,
+        reason: String,
+        location: String
+    ) {
+        // Build minimal BDB: [OID, format = 14, OCTET STRING(json-bytes)]
+        fun makeBdb(json: String) = DERSequence(arrayOf(
+            ASN1ObjectIdentifier("1.1.19785.0.257.0.14"),
+            ASN1Integer(14),
+            DEROctetString(json.toByteArray(Charsets.UTF_8))
+        )).encoded
+
+        val rawBdb = makeBdb(biometricJson)
+        val bdbOid = ASN1ObjectIdentifier("1.1.19785.0.257.0.14")
+
+        // Wrap in OCTET STRING and SET for CMS
+        val attr = Attribute(bdbOid, DERSet(DEROctetString(rawBdb)))
+        val table = AttributeTable(Hashtable<ASN1ObjectIdentifier, Attribute>().apply {
+            put(bdbOid, attr)
+        })
+        val signedAttrGen = DefaultSignedAttributeTableGenerator(table)
+
+        // Prepare certificates + digest provider
+        val certs     = certificateChain.map { it as X509Certificate }
+        val certStore = JcaCertStore(certs)
+        val digestProv = JcaDigestCalculatorProviderBuilder()
+            .setProvider("BC")
+            .build()
+
+        // Adapter for AndroidKeyStore PrivateKey → ContentSigner
+        class AndroidKeyStoreSigner(
+            key: PrivateKey,
+            algorithm: String = "SHA512withRSA"
+        ) : ContentSigner {
+            private val sig = Signature.getInstance(algorithm).apply { initSign(key) }
+            private val sigAlgId =
+                DefaultSignatureAlgorithmIdentifierFinder().find(algorithm)
+            override fun getAlgorithmIdentifier() = sigAlgId
+            override fun getOutputStream(): OutputStream = object : OutputStream() {
+                override fun write(b: Int)           = sig.update(b.toByte())
+                override fun write(b: ByteArray, off: Int, len: Int) =
+                    sig.update(b, off, len)
+            }
+            override fun getSignature(): ByteArray = sig.sign()
+        }
+
+        val signer = JcaSignerInfoGeneratorBuilder(digestProv)
+            .setSignedAttributeGenerator(signedAttrGen)
+            .build(
+                AndroidKeyStoreSigner(privateKey, "SHA512withRSA"),
+                certs[0]
+            )
+
+        val cmsGen = CMSSignedDataGenerator().apply {
+            addSignerInfoGenerator(signer)
+            addCertificates(certStore)
+        }
+
+        PDDocument.load(inputFile).use { doc ->
+            val pdSig = PDSignature().apply {
                 setFilter(PDSignature.FILTER_ADOBE_PPKLITE)
                 setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED)
-                name = "RVPP APP"
-                this.reason = reason
+
+                this.reason   = reason
                 this.location = location
-                signDate = Calendar.getInstance()
+                signDate      = Calendar.getInstance()
             }
 
-            // 5️⃣ Signature interface
-            val signatureInterface = object : SignatureInterface {
-                override fun sign(content: InputStream): ByteArray {
-                    val data = content.readBytes()
-                    val generator = CMSSignedDataGenerator()
+            doc.addSignature(pdSig, SignatureInterface { stream ->
+                val bytes = stream.readBytes()
+                cmsGen.generate(object : CMSTypedData {
+                    override fun getContentType() = CMSObjectIdentifiers.data
+                    override fun getContent()      = bytes
+                    override fun write(out: OutputStream) = out.write(bytes)
+                }, false).encoded
+            })
 
-                    val contentSigner = JcaContentSignerBuilder("SHA256withRSA")
-                        .build(privateKey)
-
-                    val cert = certificateChain[0] as? java.security.cert.X509Certificate
-                        ?: throw IllegalStateException("Certificate is not an X509Certificate")
-
-                    val signerInfo = JcaSignerInfoGeneratorBuilder(
-                        JcaDigestCalculatorProviderBuilder().build()
-                    ).build(contentSigner, cert)
-
-                    generator.addSignerInfoGenerator(signerInfo)
-
-                    val certStore = JcaCertStore(certificateChain.map { it as java.security.cert.X509Certificate })
-                    generator.addCertificates(certStore)
-
-                    val cmsData = CMSProcessableByteArray(data)
-                    val signedData = generator.generate(cmsData, false)
-
-                    return signedData.encoded
-                }
+            FileOutputStream(outputFile).use { fos ->
+                doc.saveIncremental(fos)
             }
-
-            // 6️⃣ Add signature
-            document.addSignature(signature, signatureInterface)
-
-            // 7️⃣ Save incremental back to temp file
-            FileOutputStream(tempFile, true).use { fos ->
-                document.saveIncremental(fos)
-            }
-
-            // 8️⃣ Copy fully signed file to final OutputStream
-            FileInputStream(tempFile).use { fis ->
-                fis.copyTo(outputStream)
-            }
-
-            callback.onSuccess("Signed PDF successfully written.")
-        } catch (e: Exception) {
-            callback.onError(e)
-        } finally {
-            try {
-                document?.close()
-            } catch (e: IOException) {
-                // ignore
-            }
-            tempFile?.delete()
         }
     }
 }
