@@ -53,6 +53,7 @@ class MainActivity : AppCompatActivity() {
             currentPdfUri = it
             signatureOverlay.visibility = View.GONE
             placementView.visibility = View.GONE
+            signButton.isEnabled = true
             clearButton.isEnabled = false
             saveButton.isEnabled  = false
             placeButton.isEnabled = false
@@ -79,8 +80,12 @@ class MainActivity : AppCompatActivity() {
             deleteKeyIfExists()
             generateKeyPairAndCertificate()
         }
+        signButton.isEnabled = false
 
-        loadPdfButton.setOnClickListener { requestPdf() }
+        loadPdfButton.setOnClickListener {
+            requestPdf()
+
+        }
         signButton.setOnClickListener {
             signatureOverlay.visibility = View.VISIBLE
             signatureOverlay.drawingModeEnabled = true
