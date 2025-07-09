@@ -1,18 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/rootFrame"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
+<!--    android:background="?android:attr/windowBackground"-->
 
+
+    <!-- Your PDF viewer and overlays -->
     <com.github.barteksc.pdfviewer.PDFView
         android:id="@+id/pdfView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"/>
 
     <com.example.pdfsigner.SignatureOverlayView
         android:id="@+id/signatureOverlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@android:color/transparent" />
+        android:background="@android:color/transparent"/>
 
     <com.example.pdfsigner.SignaturePlacementView
         android:id="@+id/signaturePlacementView"
@@ -21,58 +26,73 @@
         android:visibility="gone"
         android:background="@android:color/transparent"/>
 
-
-    <LinearLayout
-        android:layout_gravity="bottom"
+    <!-- Bottom bar: TableLayout with 2 rows, 3 columns -->
+    <TableLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
+        android:layout_gravity="bottom"
         android:background="#AA000000"
         android:padding="8dp">
 
-        <Button
-            android:id="@+id/loadPdfButton"
-            android:layout_weight="1"
-            android:layout_width="0dp"
+        <!-- Row 1: Load, Sign, Place -->
+        <TableRow
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <Button
+                android:id="@+id/loadPdfButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Load PDF"/>
+
+            <Button
+                android:id="@+id/signButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Sign"/>
+
+            <Button
+                android:id="@+id/placeButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Place"/>
+        </TableRow>
+
+        <!-- Row 2: Save, Clear, (spacer) -->
+        <TableRow
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Load PDF" />
+            android:layout_marginTop="4dp"
+            android:gravity="center">
 
-        <Button
-            android:id="@+id/signButton"
-            android:layout_weight="1"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:text="Sign" />
-        <Button
-            android:id="@+id/placeButton"
-            android:layout_weight="1"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:text="Place" />
-<!--            android:enabled="false" -->
+            <Button
+                android:id="@+id/saveButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Save"/>
 
+            <Button
+                android:id="@+id/clearButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Clear"/>
 
-        <Button
-            android:id="@+id/saveButton"
-            android:layout_weight="1"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:text="Save" />
+            <!-- invisible spacer to fill third column -->
 
+        </TableRow>
+    </TableLayout>
 
-        <Button
-            android:id="@+id/clearButton"
-            android:layout_weight="1"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:text="Clear" />
-    </LinearLayout>
-
+    <!-- Centered progress bar -->
     <ProgressBar
         android:id="@+id/progressBar"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
         android:layout_gravity="center"
-        android:visibility="gone" />
-</FrameLayout>
+        android:visibility="gone"/>
 
+</FrameLayout>

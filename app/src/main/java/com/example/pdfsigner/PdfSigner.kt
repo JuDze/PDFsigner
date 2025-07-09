@@ -1,3 +1,4 @@
+// File: app/src/main/java/com/example/pdfsigner/PdfSigner.kt
 package com.example.pdfsigner
 
 import android.graphics.Bitmap
@@ -37,11 +38,16 @@ import java.util.Calendar
 import java.util.Hashtable
 
 class PdfSigner {
+
     init {
+        // Install full BC provider on Android
         Security.removeProvider("BC")
         Security.insertProviderAt(BouncyCastleProvider(), 1)
     }
 
+    /**
+     * Embed your PNG signature and stash the raw JSON in the PDF Info dictionary.
+     */
     fun embedVisualSignature(
         pdfInput: InputStream,
         pdfOutput: OutputStream,
@@ -51,19 +57,38 @@ class PdfSigner {
         biometricJson: String
     ) {
         PDDocument.load(pdfInput).use { doc ->
+            // Draw signature image
             val page = doc.getPage(pageNumber - 1)
             val baos = java.io.ByteArrayOutputStream().apply {
                 visualSignatureBitmap.compress(Bitmap.CompressFormat.PNG, 100, this)
             }
-            val pdImage = PDImageXObject.createFromByteArray(doc, baos.toByteArray(), "sig_image")
-            PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true).use { cs ->
-                cs.drawImage(pdImage, position.lowerLeftX, position.lowerLeftY, position.width, position.height)
+            val pdImage = PDImageXObject.createFromByteArray(
+                doc, baos.toByteArray(), "sig_image"
+            )
+            PDPageContentStream(
+                doc, page,
+                PDPageContentStream.AppendMode.APPEND, true
+            ).use { cs ->
+                cs.drawImage(
+                    pdImage,
+                    position.lowerLeftX,
+                    position.lowerLeftY,
+                    position.width,
+                    position.height
+                )
             }
-            doc.documentInformation.setCustomMetadataValue("BiometricData", biometricJson)
+
+            // Put the raw JSON into the document's Info (visible in any PDF Properties)
+            doc.documentInformation
+                .setCustomMetadataValue("BiometricData", biometricJson)
+
             doc.save(pdfOutput)
         }
     }
 
+    /**
+     * Add a detached PKCS#7 (PAdES) signature, injecting your JSON as an ISO/IEC 19794-7 BDB attribute.
+     */
     fun addDigitalSignature(
         inputFile: File,
         outputFile: File,
@@ -73,44 +98,56 @@ class PdfSigner {
         reason: String,
         location: String
     ) {
+        // Build minimal BDB: [OID, format = 14, OCTET STRING(json-bytes)]
         fun makeBdb(json: String) = DERSequence(arrayOf(
             ASN1ObjectIdentifier("1.1.19785.0.257.0.14"),
             ASN1Integer(14),
             DEROctetString(json.toByteArray(Charsets.UTF_8))
-        ))
+        )).encoded
 
-        val certs = certificateChain.map { it as X509Certificate }
+        val rawBdb = makeBdb(biometricJson)
+        val bdbOid = ASN1ObjectIdentifier("1.1.19785.0.257.0.14")
+
+        // Wrap in OCTET STRING and SET for CMS
+        val attr = Attribute(bdbOid, DERSet(DEROctetString(rawBdb)))
+        val table = AttributeTable(Hashtable<ASN1ObjectIdentifier, Attribute>().apply {
+            put(bdbOid, attr)
+        })
+        val signedAttrGen = DefaultSignedAttributeTableGenerator(table)
+
+        // Prepare certificates + digest provider
+        val certs     = certificateChain.map { it as X509Certificate }
         val certStore = JcaCertStore(certs)
-        val digestProv = JcaDigestCalculatorProviderBuilder().setProvider("BC").build()
-        val attr = Attribute(
-            ASN1ObjectIdentifier("1.1.19785.0.257.0.14"),
-            DERSet(makeBdb(biometricJson))
-        )
-        val attrTable = AttributeTable(Hashtable<Any, Any>().apply { put(attr.attrType, attr) })
-        val signedAttrGen = DefaultSignedAttributeTableGenerator(attrTable)
+        val digestProv = JcaDigestCalculatorProviderBuilder()
+            .setProvider("BC")
+            .build()
 
-        // Wrap AndroidKeyStore key in a BC ContentSigner
+        // Adapter for AndroidKeyStore PrivateKey → ContentSigner
         class AndroidKeyStoreSigner(
             key: PrivateKey,
             algorithm: String = "SHA512withRSA"
         ) : ContentSigner {
-            private val sig: Signature = Signature.getInstance(algorithm).apply { initSign(key) }
-            private val sigAlgId = DefaultSignatureAlgorithmIdentifierFinder().find(algorithm)
+            private val sig = Signature.getInstance(algorithm).apply { initSign(key) }
+            private val sigAlgId =
+                DefaultSignatureAlgorithmIdentifierFinder().find(algorithm)
             override fun getAlgorithmIdentifier() = sigAlgId
             override fun getOutputStream(): OutputStream = object : OutputStream() {
-                override fun write(b: Int) = sig.update(b.toByte())
-                override fun write(b: ByteArray, off: Int, len: Int) = sig.update(b, off, len)
+                override fun write(b: Int)           = sig.update(b.toByte())
+                override fun write(b: ByteArray, off: Int, len: Int) =
+                    sig.update(b, off, len)
             }
             override fun getSignature(): ByteArray = sig.sign()
         }
 
-        val contentSigner: ContentSigner = AndroidKeyStoreSigner(privateKey, "SHA512withRSA")
-        val signerInfo = JcaSignerInfoGeneratorBuilder(digestProv)
+        val signer = JcaSignerInfoGeneratorBuilder(digestProv)
             .setSignedAttributeGenerator(signedAttrGen)
-            .build(contentSigner, certs[0])
+            .build(
+                AndroidKeyStoreSigner(privateKey, "SHA512withRSA"),
+                certs[0]
+            )
 
         val cmsGen = CMSSignedDataGenerator().apply {
-            addSignerInfoGenerator(signerInfo)
+            addSignerInfoGenerator(signer)
             addCertificates(certStore)
         }
 
@@ -118,19 +155,24 @@ class PdfSigner {
             val pdSig = PDSignature().apply {
                 setFilter(PDSignature.FILTER_ADOBE_PPKLITE)
                 setSubFilter(PDSignature.SUBFILTER_ADBE_PKCS7_DETACHED)
-                this.reason = reason
+
+                this.reason   = reason
                 this.location = location
-                signDate = Calendar.getInstance()
+                signDate      = Calendar.getInstance()
             }
+
             doc.addSignature(pdSig, SignatureInterface { stream ->
-                val data = stream.readBytes()
+                val bytes = stream.readBytes()
                 cmsGen.generate(object : CMSTypedData {
                     override fun getContentType() = CMSObjectIdentifiers.data
-                    override fun getContent() = data
-                    override fun write(out: OutputStream) = out.write(data)
+                    override fun getContent()      = bytes
+                    override fun write(out: OutputStream) = out.write(bytes)
                 }, false).encoded
             })
-            FileOutputStream(outputFile).use { doc.saveIncremental(it) }
+
+            FileOutputStream(outputFile).use { fos ->
+                doc.saveIncremental(fos)
+            }
         }
     }
 }
